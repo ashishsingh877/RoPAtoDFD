@@ -1,19 +1,25 @@
 """
 ai_client.py  —  Google Gemini API wrapper
-Uses: gemini-1.5-pro (best quality) with fallback to gemini-1.5-flash
+Uses v1beta REST API with correct current model names.
 """
 
-import json
-import re
-import requests
+import json, re, requests
 
 GEMINI_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
 
-def _model_url(model: str, api_key: str, stream: bool = False) -> str:
+# Correct model IDs as of 2025 — in order of preference
+FALLBACK_MODELS = [
+    "gemini-2.0-flash",
+    "gemini-1.5-flash-latest",
+    "gemini-1.5-flash",
+    "gemini-1.5-pro-latest",
+]
+
+def _url(model: str, api_key: str, stream: bool = False) -> str:
     action = "streamGenerateContent" if stream else "generateContent"
     return f"{GEMINI_BASE}/{model}:{action}?key={api_key}"
 
-def _build_body(system: str, user: str, max_tokens: int) -> dict:
+def _body(system: str, user: str, max_tokens: int) -> dict:
     return {
         "system_instruction": {"parts": [{"text": system}]},
         "contents": [{"role": "user", "parts": [{"text": user}]}],
@@ -24,118 +30,123 @@ def _build_body(system: str, user: str, max_tokens: int) -> dict:
     }
 
 def chat(api_key: str, system: str, user: str,
-         max_tokens: int = 6000, model: str = "gemini-1.5-pro") -> str:
-    """Blocking Gemini call. Returns full response text."""
-    body = _build_body(system, user, max_tokens)
-    for try_model in [model, "gemini-1.5-flash", "gemini-1.5-pro"]:
+         max_tokens: int = 6000, model: str = "gemini-2.0-flash") -> str:
+    """Blocking call — tries primary model then fallbacks."""
+    payload = _body(system, user, max_tokens)
+    models_to_try = [model] + [m for m in FALLBACK_MODELS if m != model]
+
+    for m in models_to_try:
         try:
-            r = requests.post(_model_url(try_model, api_key, stream=False),
-                              json=body, timeout=120)
+            r = requests.post(_url(m, api_key, stream=False),
+                              json=payload, timeout=120)
             if r.status_code == 200:
                 data = r.json()
                 return data["candidates"][0]["content"]["parts"][0]["text"]
+            elif r.status_code in (404, 400):
+                continue   # model not available, try next
             elif r.status_code == 429:
-                continue   # quota hit, try next model
+                continue   # quota, try next
             else:
-                raise ValueError(f"Gemini error {r.status_code}: {r.text[:300]}")
-        except (ValueError, KeyError):
+                raise ValueError(f"Gemini error {r.status_code}: {r.text[:400]}")
+        except (KeyError, IndexError):
+            continue
+        except ValueError:
             raise
         except Exception as e:
-            raise ValueError(f"Gemini request failed: {e}")
-    raise ValueError("All Gemini models failed (quota exceeded?)")
+            raise ValueError(f"Request failed: {e}")
+
+    raise ValueError(
+        "No working Gemini model found. "
+        "Check your API key is valid at aistudio.google.com"
+    )
 
 
 def stream_chat(api_key: str, system: str, user: str,
-                max_tokens: int = 6000, model: str = "gemini-1.5-pro"):
-    """
-    Streaming Gemini call. Yields text chunks.
-    Falls back to blocking call if streaming fails.
-    """
-    body = _build_body(system, user, max_tokens)
-    try:
-        r = requests.post(_model_url(model, api_key, stream=True),
-                          json=body, stream=True, timeout=180)
-        if r.status_code != 200:
-            # fall back to blocking
-            yield chat(api_key, system, user, max_tokens, model)
-            return
+                max_tokens: int = 6000, model: str = "gemini-2.0-flash"):
+    """Streaming call — yields text chunks. Falls back to blocking if needed."""
+    payload = _body(system, user, max_tokens)
+    models_to_try = [model] + [m for m in FALLBACK_MODELS if m != model]
 
-        buffer = ""
-        for raw_line in r.iter_lines(decode_unicode=True):
-            if not raw_line:
+    for m in models_to_try:
+        try:
+            r = requests.post(_url(m, api_key, stream=True),
+                              json=payload, stream=True, timeout=180)
+            if r.status_code in (404, 400):
                 continue
-            line = raw_line.strip()
-            if line.startswith("data:"):
-                line = line[5:].strip()
-            if not line or line == "[DONE]":
-                continue
-            buffer += line
-            # Try to extract text chunks from accumulated JSON fragments
-            try:
-                obj = json.loads(buffer)
-                buffer = ""
-                for cand in obj.get("candidates", []):
-                    for part in cand.get("content", {}).get("parts", []):
-                        txt = part.get("text", "")
-                        if txt:
-                            yield txt
-            except json.JSONDecodeError:
-                # Incomplete JSON — keep buffering
-                pass
+            if r.status_code != 200:
+                raise ValueError(f"Gemini error {r.status_code}: {r.text[:400]}")
 
-        # Flush any remaining buffer
-        if buffer:
-            try:
-                obj = json.loads(buffer)
-                for cand in obj.get("candidates", []):
-                    for part in cand.get("content", {}).get("parts", []):
-                        txt = part.get("text", "")
-                        if txt:
-                            yield txt
-            except Exception:
-                pass
+            # Stream JSON lines
+            buffer = ""
+            for raw in r.iter_lines(decode_unicode=True):
+                if not raw:
+                    continue
+                line = raw.strip().lstrip("data:").strip()
+                if not line or line == "[DONE]":
+                    continue
+                buffer += line
+                try:
+                    obj = json.loads(buffer)
+                    buffer = ""
+                    for cand in obj.get("candidates", []):
+                        for part in cand.get("content", {}).get("parts", []):
+                            txt = part.get("text", "")
+                            if txt:
+                                yield txt
+                except json.JSONDecodeError:
+                    pass  # incomplete chunk, keep buffering
 
-    except Exception:
-        # Full fallback to blocking
-        yield chat(api_key, system, user, max_tokens, model)
+            # Flush remaining buffer
+            if buffer:
+                try:
+                    obj = json.loads(buffer)
+                    for cand in obj.get("candidates", []):
+                        for part in cand.get("content", {}).get("parts", []):
+                            txt = part.get("text", "")
+                            if txt:
+                                yield txt
+                except Exception:
+                    pass
+            return  # success — done
+
+        except ValueError:
+            raise
+        except Exception as e:
+            raise ValueError(f"Streaming failed: {e}")
+
+    # All models failed — fall back to blocking
+    yield chat(api_key, system, user, max_tokens, model)
 
 
 def parse_json_from_response(text: str) -> list:
-    """
-    Extract a JSON array from Gemini response.
-    Handles markdown fences and leading/trailing text.
-    """
+    """Extract JSON array from Gemini response (handles markdown fences)."""
     if not text:
-        raise ValueError("Empty response")
+        raise ValueError("Empty response from Gemini")
 
-    # Strip markdown fences
     cleaned = re.sub(r"```(?:json)?", "", text).strip().rstrip("`").strip()
 
     # Try direct parse
     try:
-        result = json.loads(cleaned)
-        return result if isinstance(result, list) else [result]
+        r = json.loads(cleaned)
+        return r if isinstance(r, list) else [r]
     except json.JSONDecodeError:
         pass
 
-    # Find first [ ... ] block
-    start = cleaned.find("[")
-    end   = cleaned.rfind("]")
-    if start != -1 and end > start:
+    # Find outermost [ ... ]
+    s, e = cleaned.find("["), cleaned.rfind("]")
+    if s != -1 and e > s:
         try:
-            result = json.loads(cleaned[start:end+1])
-            return result if isinstance(result, list) else [result]
+            r = json.loads(cleaned[s:e+1])
+            return r if isinstance(r, list) else [r]
         except json.JSONDecodeError:
             pass
 
-    # Find first { ... } block (single object)
-    start = cleaned.find("{")
-    end   = cleaned.rfind("}")
-    if start != -1 and end > start:
+    # Find outermost { ... }
+    s, e = cleaned.find("{"), cleaned.rfind("}")
+    if s != -1 and e > s:
         try:
-            result = json.loads(cleaned[start:end+1])
-            return [result]
+            return [json.loads(cleaned[s:e+1])]
         except json.JSONDecodeError:
             pass
 
-    raise ValueError(f"Could not parse JSON from response. First 200 chars: {text[:200]}")
+    raise ValueError(f"Could not parse JSON. Response start: {text[:300]}")
