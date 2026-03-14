@@ -183,24 +183,35 @@ if uploaded and gemini_key:
         set_stages("done","active","")
         st.markdown("#### ② Generating Data Flow Diagrams…")
 
-        # Use blocking call for DFDs — streaming loses chunks on large JSON responses
-        with st.spinner("Gemini generating DFD JSON (this may take 30-60s)…"):
+        # Generate ONE DFD per process (avoids token truncation on multi-process responses)
+        dfd_list = []
+        gen_prog = st.progress(0, text="Generating DFD JSON…")
+        for pi, proc in enumerate(enriched):
+            pname = proc.get("process_name", f"Process {pi+1}")
+            gen_prog.progress(pi / max(len(enriched), 1),
+                              text=f"DFD {pi+1}/{len(enriched)}: {pname[:45]}…")
             try:
-                raw_dfds = chat(gemini_key, DFD_SYSTEM,
-                                f"PROCESSING ACTIVITIES:\n\n{json.dumps(enriched,indent=2)[:16000]}",
-                                8000, model)
+                raw_dfd = chat(
+                    gemini_key, DFD_SYSTEM,
+                    (f"Generate a DFD for this ONE processing activity only.\n"
+                     f"Return a JSON ARRAY with EXACTLY ONE element.\n\n"
+                     f"{json.dumps(proc, indent=2)[:8000]}"),
+                    6000, model
+                )
+                result = parse_json_from_response(raw_dfd)
+                if isinstance(result, list) and result:
+                    item = result[0]
+                    if not item.get("id"):
+                        item["id"] = f"P{pi+1:03d}"
+                    dfd_list.append(item)
+                elif isinstance(result, dict):
+                    if not result.get("id"):
+                        result["id"] = f"P{pi+1:03d}"
+                    dfd_list.append(result)
             except Exception as e:
-                st.error(f"DFD generation error: {e}")
-                raw_dfds = ""
-        try:
-            dfd_list = parse_json_from_response(raw_dfds)
-        except Exception as parse_err:
-            dfd_list = []
-            st.session_state["dfds_raw"] = raw_dfds
-            st.error(f"DFD JSON parse failed: {parse_err}")
-            st.markdown("**Raw Gemini response (first 1000 chars):**")
-            st.code(raw_dfds[:1000] if raw_dfds else "(empty)")
-            st.warning("Tip: If response starts with text before JSON, the parser should handle it. Share this error above for a fix.")
+                st.warning(f"⚠️ DFD skipped for **{pname}**: {e}")
+        gen_prog.progress(1.0, text=f"✓ {len(dfd_list)} DFD(s) generated")
+        gen_prog.empty()
 
         prog = st.progress(0, text="Rendering diagrams…")
         rendered = []
