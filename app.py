@@ -53,7 +53,7 @@ with st.sidebar:
     st.markdown('<p style="font-family:JetBrains Mono,monospace;color:#58a6ff;font-size:1rem;">🔐 ROPA Analyzer</p>', unsafe_allow_html=True)
     st.markdown("---")
     gemini_key = st.text_input("Gemini API Key", type="password", placeholder="AIza…")
-    model    = st.selectbox("Model", ["gemini-1.5-pro","gemini-1.5-flash","gemini-2.0-flash"])
+    model    = st.selectbox("Model", ["gemini-2.0-flash","gemini-1.5-flash-latest","gemini-1.5-pro-latest"])
     st.markdown("---")
     st.markdown("""
 **Output per process**
