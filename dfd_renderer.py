@@ -1,9 +1,13 @@
 """
-dfd_renderer.py — Professional DFD Renderer v8
-Clean swimlane clusters, spline edges with xlabels, 250 DPI, client-ready.
+dfd_renderer.py — Professional DFD Renderer v9
+Matches RateGain/Protiviti reference style:
+  - Clean Graphviz flow diagram
+  - Privacy controls overlaid as green boxes DIRECTLY on diagram via PIL
+  - Node positions computed from Graphviz JSON output
+  - 250 DPI, client-ready, print-quality
 """
 
-import io, re, textwrap, graphviz
+import io, re, json, math, textwrap, graphviz
 from PIL import Image, ImageDraw, ImageFont
 
 _FONT_REG  = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
@@ -13,7 +17,7 @@ def _font(size, bold=False):
     try:    return ImageFont.truetype(_FONT_BOLD if bold else _FONT_REG, size)
     except: return ImageFont.load_default()
 
-def _gv_label(text, n=14):
+def _gv_wrap(text, n=14):
     lines = textwrap.wrap(str(text).strip(), width=n)
     return "\\n".join(lines[:3]) if lines else str(text)
 
@@ -22,45 +26,57 @@ def _sid(s):
 
 PHASE_ORDER  = ["collection","processing","storage","sharing","exit","main"]
 PHASE_LABELS = {
-    "collection": "① Collection",
-    "processing": "② Processing",
+    "collection": "① Data Collection",
+    "processing": "② Processing & Review",
     "storage":    "③ Storage",
-    "sharing":    "④ Sharing",
+    "sharing":    "④ Sharing & Disclosure",
     "exit":       "⑤ Exit / Archive",
     "main":       "Processing",
 }
 
-NODE_STYLE = {
+NODE_STYLES = {
     "external":  dict(shape="box",     style="filled,rounded",
-                      fillcolor="#FFF5CC", color="#A07800", fontcolor="#5C4400", penwidth="1.8"),
+                      fillcolor="#FFF5CC", color="#A07800",
+                      fontcolor="#5C4400", penwidth="1.6"),
     "team":      dict(shape="box",     style="filled",
-                      fillcolor="#FADADD", color="#B03030", fontcolor="#641E16", penwidth="2.2"),
+                      fillcolor="#FADADD", color="#B03030",
+                      fontcolor="#641E16", penwidth="2.0",
+                      fontname="Helvetica-Bold"),
     "process":   dict(shape="box",     style="filled",
-                      fillcolor="#FFFFFF", color="#555555", fontcolor="#1A1A1A", penwidth="1.4"),
+                      fillcolor="#FFFFFF", color="#555555",
+                      fontcolor="#1A1A1A", penwidth="1.3"),
     "decision":  dict(shape="diamond", style="filled",
-                      fillcolor="#C0392B", color="#8B2222", fontcolor="#FFFFFF", penwidth="2.2"),
+                      fillcolor="#C0392B", color="#8B2222",
+                      fontcolor="#FFFFFF", penwidth="2.0",
+                      fontname="Helvetica-Bold"),
     "endpoint":  dict(shape="ellipse", style="filled",
-                      fillcolor="#B03030", color="#7B1A1A", fontcolor="#FFFFFF", penwidth="2.2"),
+                      fillcolor="#B03030", color="#7B1A1A",
+                      fontcolor="#FFFFFF", penwidth="2.0",
+                      fontname="Helvetica-Bold"),
     "datastore": dict(shape="cylinder",style="filled",
-                      fillcolor="#D4E8FA", color="#1A5276", fontcolor="#0D3B6E", penwidth="1.8"),
+                      fillcolor="#D4E8FA", color="#1A5276",
+                      fontcolor="#0D3B6E", penwidth="1.6"),
 }
 
 def _nattrs(ntype, label):
-    s = NODE_STYLE.get(ntype, NODE_STYLE["process"]).copy()
-    bold = ntype in ("team","endpoint","decision")
-    return {**s,
-            "label":    _gv_label(label, 13),
-            "fontname": "Helvetica-Bold" if bold else "Helvetica",
-            "fontsize": "12",
-            "margin":   "0.25,0.18",
-            "width":    "1.8", "height": "0.70",
-            "fixedsize":"false"}
+    s = NODE_STYLES.get(ntype, NODE_STYLES["process"]).copy()
+    s.setdefault("fontname","Helvetica")
+    return {
+        **s,
+        "label":    _gv_wrap(label, 13),
+        "fontsize": "12",
+        "margin":   "0.25,0.18",
+        "width":    "1.8",
+        "height":   "0.70",
+        "fixedsize":"false",
+    }
 
-def _build_flow(data: dict) -> bytes:
+GV_DPI = 180
+
+def _make_dot(data: dict) -> graphviz.Digraph:
     nodes = data.get("nodes", [])
     edges = data.get("edges", [])
 
-    # Group by phase
     phase_map: dict = {}
     for n in nodes:
         ph = n.get("phase","main").lower().strip()
@@ -72,26 +88,25 @@ def _build_flow(data: dict) -> bytes:
         bgcolor  = "white",
         rankdir  = "LR",
         splines  = "spline",
-        nodesep  = "0.60",
-        ranksep  = "1.3",
-        pad      = "0.5",
+        nodesep  = "0.55",
+        ranksep  = "1.2",
+        pad      = "0.40",
         fontname = "Helvetica",
         compound = "true",
-        size     = "26,12!",
+        size     = "28,10!",
         ratio    = "compress",
-        dpi      = "200",
+        dpi      = str(GV_DPI),
     )
     dot.attr("edge",
         fontname  = "Helvetica",
         fontsize  = "8",
         color     = "#555555",
-        fontcolor = "#444444",
-        arrowsize = "0.9",
-        penwidth  = "1.4",
+        fontcolor = "#555555",
+        arrowsize = "0.85",
+        penwidth  = "1.3",
         minlen    = "2",
     )
 
-    # Build swimlane clusters
     for ph in PHASE_ORDER:
         ph_nodes = phase_map.get(ph, [])
         if not ph_nodes: continue
@@ -102,23 +117,21 @@ def _build_flow(data: dict) -> bytes:
                 labeljust = "c",
                 labelloc  = "t",
                 fontname  = "Helvetica-Bold",
-                fontsize  = "11",
+                fontsize  = "10",
                 fontcolor = "#1A3A5C",
                 style     = "rounded,filled",
                 fillcolor = "#F8F9FA",
                 color     = "#CCCCCC",
-                penwidth  = "1.0",
-                margin    = "14",
+                penwidth  = "0.8",
+                margin    = "12",
             )
             for i, n in enumerate(ph_nodes):
                 nid = _sid(n["id"])
                 sg.node(nid, **_nattrs(n.get("type","process"), n.get("label","")))
-                # Force vertical ordering inside column
                 if i > 0:
                     dot.edge(_sid(ph_nodes[i-1]["id"]), nid,
-                             style="invis", weight="8")
+                             style="invis", weight="10")
 
-    # Main flow edges — use xlabel so labels don't overlap nodes
     for e in edges:
         src = _sid(e.get("from",""))
         dst = _sid(e.get("to",""))
@@ -130,237 +143,307 @@ def _build_flow(data: dict) -> bytes:
              "sensitive","special","criminal","aadhaar","pan"])
         attrs = dict(
             color    = "#C0392B" if sensitive else "#555555",
-            fontcolor= "#C0392B" if sensitive else "#555555",
-            penwidth = "2.4"     if sensitive else "1.4",
+            fontcolor= "#C0392B" if sensitive else "#666666",
+            penwidth = "2.2"     if sensitive else "1.3",
         )
         if lbl:
             attrs["xlabel"]   = f"  {lbl}  "
             attrs["fontsize"] = "8"
         dot.edge(src, dst, **attrs)
 
-    return dot.pipe(format="png")
+    return dot
 
 
-# ── Privacy controls grid ─────────────────────────────────────────────────────
-PILL_H    = 38
-PILL_R    = 9
-PILL_MINW = 165
-PILL_MAXW = 295
-PILL_GAP  = 12
-PILL_FONT = 11
-LBL_W     = 245
-ROW_VPAD  = 20
-SEC_H     = 58
-COLHDR_H  = 40
+def _get_positions(dot: graphviz.Digraph, img_w: int, img_h: int) -> dict:
+    """Get node center positions and sizes in PNG pixel coords."""
+    raw = dot.pipe(format="json")
+    gv  = json.loads(raw)
 
-def _pw(text, draw):
-    f = _font(PILL_FONT)
-    try:
-        bb = draw.textbbox((0,0), text, font=f)
-        return min(PILL_MAXW, max(PILL_MINW, bb[2]-bb[0]+30))
-    except:
-        return max(PILL_MINW, len(text)*8+30)
+    bb_str = gv.get("bb", "0,0,100,100")
+    bb     = [float(x) for x in bb_str.split(",")]
+    bb_w, bb_h = bb[2], bb[3]
+    if bb_w == 0 or bb_h == 0:
+        return {}
 
-def _draw_grid(draw, W, y0, ctrls, nodes):
-    if not ctrls: return y0
-    nlbl = {n["id"]: n.get("label", n["id"]) for n in nodes}
-    rows = [(nid, nlbl.get(nid, nid), c[:6])
-            for nid, c in ctrls.items() if c and nlbl.get(nid)]
-    if not rows: return y0
+    sx = img_w / bb_w   # pixels per point (x)
+    sy = img_h / bb_h   # pixels per point (y)
 
-    PAD = 48
+    positions = {}
+    for obj in gv.get("objects", []):
+        name = obj.get("name", "")
+        if not name or name.startswith("cluster"):
+            continue
+        pos_str = obj.get("pos", "")
+        if not pos_str or "," not in pos_str:
+            continue
+        try:
+            gx, gy = [float(v) for v in pos_str.split(",")]
+        except:
+            continue
 
-    # Section header
-    draw.rectangle([PAD, y0, W-PAD, y0+SEC_H], fill="#1A6B3A")
-    draw.text((PAD+20, y0+17),
-              "Privacy Controls Embedded by Process Step",
-              font=_font(17, bold=True), fill="#FFFFFF")
-    y = y0 + SEC_H
+        # Node size: graphviz width/height are in INCHES
+        w_in = float(obj.get("width",  1.0))
+        h_in = float(obj.get("height", 0.5))
 
-    # Column header
-    draw.rectangle([PAD, y, W-PAD, y+COLHDR_H], fill="#E8F5E9")
-    draw.line([(PAD, y+COLHDR_H),(W-PAD, y+COLHDR_H)], fill="#A5D6A7", width=1)
-    draw.line([(PAD+LBL_W, y),(PAD+LBL_W, y+COLHDR_H)], fill="#A5D6A7", width=1)
-    draw.text((PAD+14, y+13), "Process Step / Node",
-              font=_font(13, bold=True), fill="#1A5C34")
-    draw.text((PAD+LBL_W+16, y+13), "Privacy Controls Applied",
-              font=_font(13, bold=True), fill="#1A5C34")
-    y += COLHDR_H
+        px_cx = gx * sx
+        px_cy = (bb_h - gy) * sy          # flip Y
+        px_w  = w_in * 72.0 * sx          # inches → pts → px
+        px_h  = h_in * 72.0 * sy
 
-    for ri, (nid, lbl, pills) in enumerate(rows):
-        # Calc row height (simulate pill wrapping)
-        px_s = PAD + LBL_W + 16
-        n_pill_rows = 1
-        for p in pills:
-            pw = _pw(p[:26], draw)
-            if px_s + pw > W - PAD - 8:
-                n_pill_rows += 1
-                px_s = PAD + LBL_W + 16
-            px_s += pw + PILL_GAP
-        row_h = ROW_VPAD*2 + n_pill_rows*(PILL_H+PILL_GAP) - PILL_GAP + ROW_VPAD
+        positions[name] = {
+            "cx": px_cx, "cy": px_cy,
+            "w":  px_w,  "h":  px_h,
+            "x1": px_cx - px_w/2, "y1": px_cy - px_h/2,
+            "x2": px_cx + px_w/2, "y2": px_cy + px_h/2,
+        }
 
-        bg = "#FFFFFF" if ri%2==0 else "#F5FBF5"
-        draw.rectangle([PAD, y, W-PAD, y+row_h], fill=bg)
-        draw.line([(PAD, y+row_h),(W-PAD, y+row_h)], fill="#C8E6C9", width=1)
-        draw.line([(PAD+LBL_W, y),(PAD+LBL_W, y+row_h)], fill="#C8E6C9", width=1)
+    return positions
 
-        # Left: label
-        lbl_y = y + ROW_VPAD
-        for ll in textwrap.wrap(lbl, 18)[:2]:
-            draw.text((PAD+14, lbl_y), ll,
-                      font=_font(13, bold=True), fill="#2C3E50")
-            lbl_y += 20
 
-        # Right: pills
-        px = PAD + LBL_W + 16
-        py = y + ROW_VPAD
-        for p in pills:
-            t  = p[:26]
-            pw = _pw(t, draw)
-            if px + pw > W - PAD - 8:
-                px = PAD + LBL_W + 16
-                py += PILL_H + PILL_GAP
-            draw.rounded_rectangle([px, py, px+pw, py+PILL_H],
-                                   radius=PILL_R, fill="#D5E8D4",
-                                   outline="#27AE60", width=1)
-            f = _font(PILL_FONT)
+def _overlay_controls(img: Image.Image, positions: dict,
+                       privacy_controls: dict, nodes: list) -> Image.Image:
+    """
+    Overlay green privacy control boxes directly on the diagram,
+    adjacent to each relevant node — matching the RateGain reference style.
+    """
+    img   = img.copy()
+    draw  = ImageDraw.Draw(img)
+    img_w, img_h = img.size
+
+    # Scale control box sizes proportionally to image
+    scale     = img_w / 3200          # reference scale
+    BOX_W     = max(140, int(175 * scale))
+    BOX_H     = max(24,  int(30  * scale))
+    GAP_X     = max(5,   int(8   * scale))
+    GAP_Y     = max(4,   int(6   * scale))
+    COLS      = 2
+    V_MARGIN  = max(14,  int(18  * scale))
+    FONT_SZ   = max(8,   int(10  * scale))
+    LINE_W    = max(1,   int(1.5 * scale))
+
+    node_lbl = {n["id"]: n.get("label", n["id"]) for n in nodes}
+
+    for raw_nid, controls in privacy_controls.items():
+        sid = _sid(raw_nid)
+        if sid not in positions or not controls:
+            continue
+
+        pos = positions[sid]
+        cx   = pos["cx"];  cy = pos["cy"]
+        nw   = pos["w"];   nh = pos["h"]
+        y1   = pos["y1"];  y2 = pos["y2"]
+        x1   = pos["x1"];  x2 = pos["x2"]
+
+        pills = controls[:8]
+        n_c   = min(COLS, len(pills))
+        n_r   = math.ceil(len(pills) / n_c)
+
+        block_w = n_c * (BOX_W + GAP_X) - GAP_X
+        block_h = n_r * (BOX_H + GAP_Y) - GAP_Y
+
+        # Choose placement: above if enough room, else below
+        if y1 > block_h + V_MARGIN * 2:
+            bx = cx - block_w / 2
+            by = y1 - block_h - V_MARGIN
+            # Connector line: from node top to block bottom
+            draw.line([(int(cx), int(y1)),
+                       (int(cx), int(by + block_h + 4))],
+                      fill="#27AE60", width=LINE_W)
+        else:
+            bx = cx - block_w / 2
+            by = y2 + V_MARGIN
+            # Connector line: from node bottom to block top
+            draw.line([(int(cx), int(y2)),
+                       (int(cx), int(by - 4))],
+                      fill="#27AE60", width=LINE_W)
+
+        # Clamp block to image bounds
+        if bx < 4:               bx = 4
+        if bx + block_w > img_w - 4: bx = img_w - block_w - 4
+
+        # Draw each pill
+        for i, ctrl in enumerate(pills):
+            r = i // n_c
+            c = i  % n_c
+            px = bx + c * (BOX_W + GAP_X)
+            py = by + r * (BOX_H + GAP_Y)
+
+            draw.rounded_rectangle(
+                [int(px), int(py), int(px+BOX_W), int(py+BOX_H)],
+                radius=max(4, int(6*scale)),
+                fill="#D5E8D4", outline="#2E8B57", width=1
+            )
+
+            text = ctrl[:24]
+            f    = _font(FONT_SZ)
             try:
-                bb = draw.textbbox((0,0),t,font=f)
-                tw,th = bb[2]-bb[0], bb[3]-bb[1]
+                bb = draw.textbbox((0,0), text, font=f)
+                tw, th = bb[2]-bb[0], bb[3]-bb[1]
             except:
-                tw,th = len(t)*7, 13
-            draw.text((px+(pw-tw)//2, py+(PILL_H-th)//2),
-                      t, font=f, fill="#145A32")
-            px += pw + PILL_GAP
-        y += row_h
+                tw, th = len(text)*6, FONT_SZ
 
-    draw.line([(PAD, y),(W-PAD, y)], fill="#A5D6A7", width=2)
-    return y + 26
+            draw.text(
+                (int(px + (BOX_W-tw)/2),
+                 int(py + (BOX_H-th)/2)),
+                text, font=f, fill="#145A32"
+            )
+
+    return img
 
 
-# ── PIL composition ───────────────────────────────────────────────────────────
+# ── PIL composition ────────────────────────────────────────────────────────────
 HEADER_H = 88
-BANNER_H = 54
+BANNER_H = 52
 LEG_H    = 52
 PAD      = 48
 
-def _compose(graph_png, title, state, banner_txt, banner_color,
-             privacy_controls=None, nodes=None):
+def _compose(flow_png: bytes, title: str, state: str,
+             banner_txt: str, banner_color: str,
+             privacy_controls: dict = None,
+             nodes: list = None) -> Image.Image:
 
-    g = Image.open(io.BytesIO(graph_png)).convert("RGB")
-
+    # ── Load and scale flow diagram ───────────────────────────────────────────
+    g = Image.open(io.BytesIO(flow_png)).convert("RGB")
     MIN_W = 3200
     if g.width < MIN_W:
         sc = MIN_W / g.width
-        g  = g.resize((int(g.width*sc), int(g.height*sc)), Image.LANCZOS)
+        g  = g.resize((int(g.width * sc), int(g.height * sc)), Image.LANCZOS)
 
-    W = g.width + PAD*2
+    W = g.width + PAD * 2
+    H = HEADER_H + BANNER_H + g.height + LEG_H + 24
 
-    ctrl_h = 0
-    if state=="future" and privacy_controls and nodes:
-        nids = {n["id"] for n in nodes}
-        n_r  = sum(1 for nid,c in privacy_controls.items() if c and nid in nids)
-        ctrl_h = SEC_H + COLHDR_H + n_r*(ROW_VPAD*2+PILL_H+PILL_GAP+18) + 60
+    canvas = Image.new("RGB", (W, H), "#FFFFFF")
+    draw   = ImageDraw.Draw(canvas)
 
-    H = HEADER_H + BANNER_H + g.height + LEG_H + ctrl_h + 40
+    # ── Header ────────────────────────────────────────────────────────────────
+    draw.rectangle([0, 0, W, HEADER_H], fill="#1A3A5C")
+    # Logo tile
+    draw.rectangle([14, 12, 106, HEADER_H-12],
+                   fill="#2470A0", outline="#154C80", width=2)
+    draw.text((20, 18), "DATA\nFLOW\nANALYSIS",
+              font=_font(10, bold=True), fill="#FFFFFF")
+    # Title
+    draw.text((120, 10), title,
+              font=_font(30, bold=True), fill="#FFFFFF")
+    draw.text((121, 52),
+              "Privacy & Data Protection Review  ·  DPDPA 2023 / GDPR",
+              font=_font(14), fill="#93C6E7")
+    # State badge top-right
+    badge_txt = "CURRENT STATE" if state == "asis" else "POST COMPLIANCE"
+    badge_col = "#C0392B"       if state == "asis" else "#1A6B3A"
+    draw.rounded_rectangle([W-310, 16, W-14, HEADER_H-16],
+                           radius=6, fill=badge_col)
+    draw.text((W-297, 30), badge_txt,
+              font=_font(14, bold=True), fill="#FFFFFF")
 
-    cv = Image.new("RGB", (W,H), "#FFFFFF")
-    dr = ImageDraw.Draw(cv)
+    # ── Banner ────────────────────────────────────────────────────────────────
+    draw.rectangle([0, HEADER_H, W, HEADER_H+BANNER_H], fill=banner_color)
+    draw.text((PAD, HEADER_H+14), "◼  " + banner_txt,
+              font=_font(18, bold=True), fill="#FFFFFF")
 
-    # Header
-    dr.rectangle([0,0,W,HEADER_H], fill="#1A3A5C")
-    dr.rectangle([14,12,104,HEADER_H-12], fill="#2470A0", outline="#154C80", width=2)
-    dr.text((20,20), "DATA\nFLOW\nANALYSIS", font=_font(10,True), fill="#FFFFFF")
-    dr.text((118,10), title, font=_font(30,True), fill="#FFFFFF")
-    dr.text((119,52), "Privacy & Data Protection Review  ·  DPDPA 2023 / GDPR",
-            font=_font(14), fill="#93C6E7")
-    # State badge (top right)
-    sl  = "CURRENT STATE" if state=="asis" else "POST COMPLIANCE"
-    sc2 = "#C0392B" if state=="asis" else "#1A6B3A"
-    dr.rounded_rectangle([W-310,16, W-14, HEADER_H-16], radius=6, fill=sc2)
-    dr.text((W-295, 30), sl, font=_font(14,True), fill="#FFFFFF")
+    # ── Paste flow diagram ────────────────────────────────────────────────────
+    canvas.paste(g, (PAD, HEADER_H + BANNER_H))
 
-    # Banner
-    dr.rectangle([0,HEADER_H,W,HEADER_H+BANNER_H], fill=banner_color)
-    dr.text((PAD, HEADER_H+15), "◼  "+banner_txt,
-            font=_font(20,True), fill="#FFFFFF")
-
-    # Diagram
-    cv.paste(g, (PAD, HEADER_H+BANNER_H))
-
-    # Legend
-    ly = HEADER_H + BANNER_H + g.height + 6
-    dr.rectangle([0,ly,W,ly+LEG_H], fill="#F4F6F8")
-    dr.line([(0,ly),(W,ly)], fill="#CCCCCC", width=1)
+    # ── Legend ────────────────────────────────────────────────────────────────
+    ly = HEADER_H + BANNER_H + g.height + 5
+    draw.rectangle([0, ly, W, ly + LEG_H], fill="#F4F6F8")
+    draw.line([(0, ly), (W, ly)], fill="#CCCCCC", width=1)
     items = [
-        ("#FFF5CC","#A07800","External Entity / Data Subject"),
-        ("#FADADD","#B03030","Internal Team / Department"),
+        ("#FFF5CC","#A07800","External Entity"),
+        ("#FADADD","#B03030","Internal Team"),
         ("#FFFFFF","#555555","Process Step"),
-        ("#C0392B","#8B2222","Decision Gate / Endpoint"),
-        ("#D4E8FA","#1A5276","Data Store / System"),
-        ("#D5E8D4","#27AE60","Privacy Control"),
+        ("#C0392B","#8B2222","Decision / Endpoint"),
+        ("#D4E8FA","#1A5276","Data Store"),
+        ("#D5E8D4","#2E8B57","Privacy Control"),
     ]
     lx = PAD
-    for fc,sc,lb in items:
-        dr.rounded_rectangle([lx,ly+14,lx+20,ly+32],radius=4,fill=fc,outline=sc,width=1)
-        dr.text((lx+26,ly+15), lb, font=_font(11), fill="#444444")
-        lx += 205
-    dr.text((PAD, ly+LEG_H-16),
-            "⚠  Red arrows indicate sensitive / special category data flows  (health, financial, biometric, etc.)",
-            font=_font(9), fill="#C0392B")
+    for fc, sc, lb in items:
+        draw.rounded_rectangle([lx, ly+14, lx+20, ly+32],
+                               radius=4, fill=fc, outline=sc, width=1)
+        draw.text((lx+26, ly+15), lb, font=_font(11), fill="#444444")
+        lx += 188
+    draw.text((PAD, ly+LEG_H-16),
+              "⚠  Red arrows = sensitive / special category data flows",
+              font=_font(9), fill="#C0392B")
 
-    # Privacy grid
-    if state=="future" and privacy_controls and nodes:
-        cy   = ly + LEG_H + 14
-        dr.line([(PAD,cy-6),(W-PAD,cy-6)], fill="#E0E0E0", width=1)
-        ey   = _draw_grid(dr, W, cy, privacy_controls, nodes)
-        cv   = cv.crop((0,0,W,ey+28))
-
-    return cv
-
-def _to_png(img):
-    b=io.BytesIO(); img.save(b,format="PNG",dpi=(250,250)); return b.getvalue()
-
-def _to_pdf(img):
-    b=io.BytesIO(); img.save(b,format="PDF",resolution=250); return b.getvalue()
-
-def render_dfd(dfd_data):
-    title  = dfd_data.get("process_name","Data Flow Diagram")
-    asis   = dfd_data.get("asis",  {"nodes":[],"edges":[]})
-    future = dfd_data.get("future",{"nodes":[],"edges":[]})
-    ctrls  = dfd_data.get("privacy_controls",{})
-
-    a_raw = _build_flow(asis)
-    f_raw = _build_flow(future)
-
-    ai = _compose(a_raw, title, "asis",
-                  "Current State  ·  Existing Data Flows (Without Privacy Controls)",
-                  "#C0392B")
-    fi = _compose(f_raw, title, "future",
-                  "Post Compliance  ·  Privacy-Embedded Future State",
-                  "#1A6B3A",
-                  privacy_controls=ctrls,
-                  nodes=future.get("nodes",[]))
-
-    return _to_png(ai), _to_pdf(ai), _to_png(fi), _to_pdf(fi)
+    return canvas
 
 
+def render_dfd(dfd_data: dict) -> tuple:
+    """
+    Returns (asis_png, asis_pdf, future_png, future_pdf).
+    Post-compliance: green privacy controls overlaid DIRECTLY on diagram near each node.
+    """
+    title  = dfd_data.get("process_name", "Data Flow Diagram")
+    asis   = dfd_data.get("asis",   {"nodes":[], "edges":[]})
+    future = dfd_data.get("future", {"nodes":[], "edges":[]})
+    ctrls  = dfd_data.get("privacy_controls", {})
+
+    def _to_png(img):
+        b = io.BytesIO(); img.save(b, format="PNG", dpi=(250,250)); return b.getvalue()
+    def _to_pdf(img):
+        b = io.BytesIO(); img.save(b, format="PDF", resolution=250); return b.getvalue()
+
+    # ── Current State (clean flow) ─────────────────────────────────────────────
+    dot_a    = _make_dot(asis)
+    png_a    = dot_a.pipe(format="png")
+    asis_img = _compose(png_a, title, "asis",
+                        "Current State  ·  Existing Data Flows (Without Privacy Controls)",
+                        "#C0392B")
+
+    # ── Post Compliance (flow + overlaid green control boxes) ─────────────────
+    TOP_PAD = 260  # pixels of white space above diagram for control boxes
+    BOT_PAD = 80
+
+    dot_f    = _make_dot(future)
+    raw_png  = dot_f.pipe(format="png")
+    flow_raw = Image.open(io.BytesIO(raw_png)).convert("RGB")
+    orig_w, orig_h = flow_raw.size
+
+    # Create padded canvas with white space above/below
+    padded = Image.new("RGB", (orig_w, orig_h + TOP_PAD + BOT_PAD), "#FFFFFF")
+    padded.paste(flow_raw, (0, TOP_PAD))
+
+    # Get positions from original image dimensions, then offset Y by TOP_PAD
+    positions = _get_positions(dot_f, orig_w, orig_h)
+    for k in positions:
+        positions[k]["cy"] += TOP_PAD
+        positions[k]["y1"] += TOP_PAD
+        positions[k]["y2"] += TOP_PAD
+
+    # Overlay controls
+    annotated = _overlay_controls(padded, positions, ctrls, future.get("nodes", []))
+
+    # Save to bytes for compose
+    buf = io.BytesIO(); annotated.save(buf, format="PNG"); buf.seek(0)
+    png_f_annotated = buf.getvalue()
+
+    future_img = _compose(png_f_annotated, title, "future",
+                          "Post Compliance  ·  Privacy-Embedded Future State",
+                          "#1A6B3A")
+
+    return _to_png(asis_img), _to_pdf(asis_img), _to_png(future_img), _to_pdf(future_img)
+
+
+# ── AI schema ─────────────────────────────────────────────────────────────────
 DFD_JSON_SCHEMA = '''
 Return ONLY a valid JSON array with exactly ONE element. No markdown. No text before or after.
 
 [{"id":"P001","process_name":"Name ≤50 chars",
   "asis":{"nodes":[...],"edges":[...]},
   "future":{"nodes":[...],"edges":[...]},
-  "privacy_controls":{"node_id":["Control A","Control B","Control C","Control D"]},
+  "privacy_controls":{"node_id":["Control 1","Control 2","Control 3","Control 4"]},
   "narrative":"3-5 sentences."}]
 
 NODE: {"id":"snake_id","label":"≤13 chars","type":"external|team|process|decision|endpoint|datastore","phase":"collection|processing|storage|sharing|exit"}
 EDGE: {"from":"id","to":"id","label":"≤13 chars"}
 
-TYPES: external=people/orgs outside company, team=internal depts, process=action steps,
-       decision=red diamond yes/no gates, endpoint=final states, datastore=where data lives
-PHASES must be in left-to-right order: collection→processing→storage→sharing→exit
+TYPES: external=people/orgs outside; team=internal depts; process=action steps;
+       decision=yes/no gates (red diamond); endpoint=final states (red oval); datastore=storage systems
+PHASES (strict L→R): collection → processing → storage → sharing → exit
 
-CRITICAL: Min 12 nodes+12 edges. future node IDs=same as asis. All edge IDs must exist.
-PRIVACY CONTROLS: up to 5 per node, ≤24 chars, be specific (e.g. "MFA for HRMS Login" not "Security")
+PRIVACY CONTROLS (future state): 3-5 per node, ≤22 chars each.
+  These appear as green boxes DIRECTLY ON the diagram near each node.
+  Be specific: "MFA for HRMS Login" not "Security"; "DPA with BGV Vendor" not "Agreement"
+RULES: Min 12 nodes+12 edges. future node IDs=same as asis. All edge IDs must exist.
 '''
