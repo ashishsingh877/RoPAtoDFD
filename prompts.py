@@ -1,12 +1,9 @@
-"""
-prompts.py  -  AI system prompts
-"""
+"""prompts.py"""
 from dfd_renderer import DFD_JSON_SCHEMA
 
 EXTRACT_SYSTEM = """
-You are a senior privacy engineer and DPDPA 2023 / GDPR compliance expert.
-Analyse the ROPA data and return ONLY a valid JSON array. No markdown, no commentary.
-
+You are a senior privacy engineer and DPDPA 2023 / GDPR expert.
+Analyse the ROPA and return ONLY a valid JSON array. No markdown, no commentary.
 Each element must contain:
   id, process_name, function_name, country, purpose,
   data_subjects, personal_data_categories, sensitive_data,
@@ -16,32 +13,37 @@ Each element must contain:
   disposal_method, security_measures, encryption, access_controls,
   dpia_required, consent_mechanism, data_principal_rights,
   automated_decision_making, breach_occurred, notes
-
-Rules:
-- Empty string for missing fields.
-- Merge multi-line values into comma-separated strings.
-- Infer sensitive data type from context.
+Rules: empty string for missing fields. Merge multi-line values with commas.
 """.strip()
 
 
 DFD_SYSTEM = f"""
-You are a Level-1 Data Flow Diagram specialist and privacy architect.
-Your diagrams must match the professional quality of the RateGain / Protiviti HR Data Flow style.
+You are a Level-1 Data Flow Diagram specialist and DPDPA 2023 privacy architect.
 
-For EACH processing activity, create TWO versions of the DFD:
-  1. CURRENT STATE (As-Is) — the process as it currently operates, without formal privacy controls
-  2. FUTURE STATE (Post Compliance) — the same process with privacy controls embedded as green annotations
+TASK: Generate a professional DFD for ONE processing activity.
+Return a JSON ARRAY with EXACTLY ONE element. NO markdown fences. NO text before or after.
 
 {DFD_JSON_SCHEMA}
 
-QUALITY REQUIREMENTS:
-- Show the COMPLETE data lifecycle: collection → processing → validation → storage → sharing → retention/disposal
-- Use actual system names and vendor names from the ROPA data (e.g. Workday, MMM Limited, HRMS)
-- The future state nodes should be the SAME as As-Is, but with privacy_controls attached
-- Privacy controls should be specific, not generic (e.g. "Consent via CMP" not just "Consent")
-- Sensitive data edges (health, financial, biometric) will be highlighted in red automatically
-- Include at least one decision node per process (consent check, legal basis gate, or approval step)
-- Include at least one datastore node (where data is actually stored)
+LAYOUT PRINCIPLE (critical for correct rendering):
+- "collection" phase nodes = parallel DATA SOURCES (people/orgs sending data IN)
+  These stack vertically on the LEFT. Examples: Career Portal, Email, Agency, LinkedIn
+- "processing" phase nodes = SEQUENTIAL steps flowing LEFT→RIGHT
+  Keep to 4-6 nodes connected in a chain. Examples: HR Team → Interview → BGV Check → Decision
+- "storage" phase nodes = systems where data LIVES. Max 3. Examples: HRMS, Email System
+- "sharing" phase nodes = EXTERNAL RECIPIENTS getting data OUT. Examples: BGV Vendor, Bank, Insurance
+- "exit" phase nodes = FINAL STATES. Examples: Hired, Rejected, Archived, Offboarded
+
+PRIVACY CONTROLS (CRITICAL - these appear as green boxes on the diagram):
+- The "privacy_controls" dict MUST use EXACTLY the same node IDs as in "asis"/"future" nodes
+- Example: if node id is "hr_team", use "hr_team" as the key — NOT "HR Team" or "HRTeam"
+- Provide 3-5 controls per important node
+- Good controls: "Privacy Notice (Website)", "Role-based Access Controls", "DPA with BGV Partner",
+  "MFA for HR Access", "Encryption at Rest", "Candidate Consent for BGV",
+  "Secure API / Encrypted Transfer", "Vendor Due Diligence", "Data Retention Policy"
+
+EDGE LABELS: Short data flow descriptions, max 12 chars. Examples:
+  "Resume + Docs", "Applications", "BGV Request", "Salary Details", "Bank Details"
 """.strip()
 
 
@@ -58,32 +60,14 @@ Overall risk posture, top 3 critical findings, immediate actions needed.
 | # | Process ID | Process Name | Risk Description | Category | Likelihood | Impact | Risk Rating | Recommended Mitigation |
 |---|---|---|---|---|---|---|---|---|
 
-Categories: Legal Basis / Data Minimisation / Retention / Security / Transfer / Consent / Rights / DPIA
-Likelihood & Impact: High / Medium / Low  |  Rating: Critical / High / Medium / Low
-
 ## 3. Legal Basis Adequacy Review
-| Process | Claimed Basis | Valid? | Gap / Issue | Recommendation |
-|---|---|---|---|---|
-
 ## 4. Data Minimisation and Purpose Limitation Gaps
-
 ## 5. Retention and Disposal Issues
-Flag: no defined period / no disposal method / no policy reference.
-
 ## 6. Third-Country and Cross-Border Transfer Review
-
 ## 7. Security Measure Gaps
-Flag: no encryption / no access controls / no security description.
-
 ## 8. DPIA Requirements
-| Process | DPIA Trigger? | Reason | Status | Action Required |
-|---|---|---|---|---|
-
-## 9. Data Principal Rights Gaps (access, correction, erasure, grievance, nomination)
-
+## 9. Data Principal Rights Gaps
 ## 10. Prioritised Action Plan
-| Priority | Action | Process(es) | Responsible | Target Date |
-|---|---|---|---|---|
 
 Use Markdown tables. Reference specific process IDs. Be precise and actionable.
 """.strip()
