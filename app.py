@@ -52,7 +52,19 @@ hr { border-color:#21262d; }
 with st.sidebar:
     st.markdown('<p style="font-family:JetBrains Mono,monospace;color:#58a6ff;font-size:1rem;">🔐 ROPA Analyzer</p>', unsafe_allow_html=True)
     st.markdown("---")
-    groq_key = st.text_input("Groq API Key", type="password", placeholder="gsk_…")
+    # Auto-load from Streamlit Secrets first
+    _secret_key = ""
+    try:
+        _secret_key = (st.secrets.get("GROQ_API_KEY","") or
+                       st.secrets.get("groq_api_key",""))
+    except Exception:
+        pass
+    if _secret_key:
+        groq_key = _secret_key
+        st.success("🔑 API key loaded from Secrets")
+    else:
+        groq_key = st.text_input("Groq API Key", type="password", placeholder="gsk_…",
+                                  help="Tip: add GROQ_API_KEY to Streamlit Secrets to skip typing this")
     model    = st.selectbox("Model", ["llama-3.3-70b-versatile","llama3-70b-8192","mixtral-8x7b-32768"])
     st.markdown("---")
     st.markdown("""
