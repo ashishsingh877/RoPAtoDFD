@@ -1,117 +1,148 @@
 """
-ai_client.py  —  Google Gemini API wrapper
-gemini-2.5-flash / gemini-2.5-pro
+ai_client.py  —  Groq API wrapper
+Model: llama-3.3-70b-versatile (best for strict JSON)
+Free at console.groq.com
 """
 
 import json, re, requests
 
-BASE       = "https://generativelanguage.googleapis.com/v1beta/models"
-ALL_MODELS = ["gemini-2.5-flash", "gemini-2.5-pro"]
+GROQ_BASE  = "https://api.groq.com/openai/v1/chat/completions"
+ALL_MODELS = [
+    "llama-3.3-70b-versatile",
+    "llama3-70b-8192",
+    "llama-3.1-70b-versatile",
+    "mixtral-8x7b-32768",
+]
 
-def _body(system: str, user: str, max_tokens: int) -> dict:
+def _body(system: str, user: str, max_tokens: int, model: str) -> dict:
     return {
-        "system_instruction": {"parts": [{"text": system}]},
-        "contents": [{"role": "user", "parts": [{"text": user}]}],
-        "generationConfig": {"maxOutputTokens": max_tokens, "temperature": 0.2}
+        "model":       model,
+        "temperature": 0.2,
+        "max_tokens":  max_tokens,
+        "messages": [
+            {"role": "system",  "content": system},
+            {"role": "user",    "content": user},
+        ]
     }
 
-def _extract_text(data: dict) -> str:
-    """Collect all non-thought text parts from a Gemini response."""
-    parts = []
-    for cand in data.get("candidates", []):
-        for part in cand.get("content", {}).get("parts", []):
-            if not part.get("thought") and part.get("text"):
-                parts.append(part["text"])
-    return "\n".join(parts)
-
 def chat(api_key: str, system: str, user: str,
-         max_tokens: int = 6000, model: str = "gemini-2.5-flash") -> str:
-    """Blocking call — returns full response text."""
-    payload = _body(system, user, max_tokens)
-    models  = [model] + [m for m in ALL_MODELS if m != model]
-    errors  = []
+         max_tokens: int = 8000, model: str = "llama-3.3-70b-versatile") -> str:
+    """Blocking Groq call with model fallback."""
+    models = [model] + [m for m in ALL_MODELS if m != model]
+    errors = []
     for m in models:
-        url = f"{BASE}/{m}:generateContent?key={api_key}"
         try:
-            r = requests.post(url, json=payload, timeout=300)
+            r = requests.post(
+                GROQ_BASE,
+                headers={"Authorization": f"Bearer {api_key}",
+                         "Content-Type": "application/json"},
+                json=_body(system, user, max_tokens, m),
+                timeout=120
+            )
             if r.status_code == 200:
-                txt = _extract_text(r.json())
-                if txt:
-                    return txt
-                errors.append(f"[{m}] empty response body")
-                continue
+                return r.json()["choices"][0]["message"]["content"]
             if r.status_code == 401:
-                raise ValueError("Invalid API key. Visit https://aistudio.google.com/apikey")
-            if r.status_code == 403:
-                raise ValueError("Permission denied (403). Enable Generative Language API.")
+                raise ValueError("Invalid Groq API key. Get one free at https://console.groq.com")
             try:    msg = r.json().get("error", {}).get("message", r.text[:300])
             except: msg = r.text[:300]
             errors.append(f"[{m}] {r.status_code}: {msg}")
+            if r.status_code == 429:
+                continue   # rate limit — try next model
         except ValueError: raise
         except Exception as e: errors.append(f"[{m}] {e}")
-    raise ValueError("Gemini failed:\n" + "\n".join(errors))
+    raise ValueError("Groq failed:\n" + "\n".join(errors))
 
 
 def stream_chat(api_key: str, system: str, user: str,
-                max_tokens: int = 6000, model: str = "gemini-2.5-flash"):
-    """Streaming — for display only. Falls back to blocking automatically."""
-    # For streaming we collect everything then yield it so we never lose chunks
-    try:
-        full = chat(api_key, system, user, max_tokens, model)
-        # Yield in chunks for the live preview effect
-        chunk_size = 120
-        for i in range(0, len(full), chunk_size):
-            yield full[i:i+chunk_size]
-    except Exception as e:
-        raise ValueError(str(e))
+                max_tokens: int = 8000, model: str = "llama-3.3-70b-versatile"):
+    """Streaming Groq call — yields text chunks."""
+    models = [model] + [m for m in ALL_MODELS if m != model]
+    for m in models:
+        try:
+            r = requests.post(
+                GROQ_BASE,
+                headers={"Authorization": f"Bearer {api_key}",
+                         "Content-Type": "application/json"},
+                json={**_body(system, user, max_tokens, m), "stream": True},
+                stream=True, timeout=120
+            )
+            if r.status_code == 401:
+                raise ValueError("Invalid Groq API key.")
+            if r.status_code != 200:
+                continue
+
+            for raw in r.iter_lines(decode_unicode=True):
+                if not raw or not raw.startswith("data: "):
+                    continue
+                chunk = raw[6:]
+                if chunk.strip() == "[DONE]":
+                    return
+                try:
+                    delta = json.loads(chunk)["choices"][0]["delta"].get("content","")
+                    if delta:
+                        yield delta
+                except Exception:
+                    pass
+            return  # success
+
+        except ValueError: raise
+        except Exception: continue
+
+    # Fallback to blocking
+    yield chat(api_key, system, user, max_tokens, model)
+
+
+def _repair_truncated_json(text: str) -> str:
+    """Close unclosed brackets caused by token limits."""
+    stack, in_string, escape_next = [], False, False
+    for ch in text:
+        if escape_next:       escape_next = False; continue
+        if ch == '\\' and in_string: escape_next = True; continue
+        if ch == '"':         in_string = not in_string; continue
+        if in_string:         continue
+        if ch in ('{', '['):  stack.append(ch)
+        elif ch == '}' and stack and stack[-1] == '{': stack.pop()
+        elif ch == ']' and stack and stack[-1] == '[': stack.pop()
+    repaired = text.rstrip().rstrip(',')
+    for ch in reversed(stack):
+        repaired += '}' if ch == '{' else ']'
+    return repaired
 
 
 def parse_json_from_response(text: str) -> list:
-    """
-    Robust JSON extractor. Handles:
-    - ```json ... ``` fences
-    - Prose before/after JSON
-    - Truncated closing fence
-    - Trailing commas
-    """
+    """Robust JSON extractor: handles fences, preamble, truncation, trailing commas."""
     if not text:
-        raise ValueError("Empty response from Gemini")
+        raise ValueError("Empty response")
 
-    # Step 1: strip ALL backtick fences and surrounding whitespace
-    cleaned = re.sub(r"```+\w*", "", text)
-    cleaned = cleaned.strip()
+    cleaned = re.sub(r"```+\w*", "", text).strip()
 
-    # Step 2: find the outermost [ ... ] array
-    s = cleaned.find("[")
-    e = cleaned.rfind("]")
-    if s != -1 and e > s:
-        candidate = cleaned[s : e + 1]
-        # Fix trailing commas (common LLM mistake)
-        candidate = re.sub(r",\s*([\]\}])", r"\1", candidate)
+    def _try_parse(s):
+        s = re.sub(r",\s*([\]\}])", r"\1", s)   # fix trailing commas
         try:
-            result = json.loads(candidate)
-            return result if isinstance(result, list) else [result]
-        except json.JSONDecodeError:
+            r = json.loads(s)
+            return r if isinstance(r, list) else [r]
+        except Exception:
             pass
-
-    # Step 3: find outermost { ... } object
-    s = cleaned.find("{")
-    e = cleaned.rfind("}")
-    if s != -1 and e > s:
-        candidate = cleaned[s : e + 1]
-        candidate = re.sub(r",\s*([\]\}])", r"\1", candidate)
+        repaired = _repair_truncated_json(s)
+        repaired = re.sub(r",\s*([\]\}])", r"\1", repaired)
         try:
-            return [json.loads(candidate)]
-        except json.JSONDecodeError:
-            pass
+            r = json.loads(repaired)
+            return r if isinstance(r, list) else [r]
+        except Exception:
+            return None
 
-    # Step 4: direct parse
-    try:
-        result = json.loads(cleaned)
-        return result if isinstance(result, list) else [result]
-    except Exception:
-        pass
+    # Try [ ... ]
+    s, e = cleaned.find("["), cleaned.rfind("]")
+    if s != -1:
+        result = _try_parse(cleaned[s: e+1] if e > s else cleaned[s:])
+        if result is not None:
+            return result
 
-    raise ValueError(
-        f"Could not extract valid JSON.\nFirst 600 chars:\n{text[:600]}"
-    )
+    # Try { ... }
+    s, e = cleaned.find("{"), cleaned.rfind("}")
+    if s != -1:
+        result = _try_parse(cleaned[s: e+1] if e > s else cleaned[s:])
+        if result is not None:
+            return result
+
+    raise ValueError(f"Could not extract valid JSON.\nFirst 500 chars:\n{text[:500]}")
