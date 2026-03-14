@@ -183,7 +183,15 @@ if uploaded and gemini_key:
         set_stages("done","active","")
         st.markdown("#### ② Generating Data Flow Diagrams…")
 
-        raw_dfds = stream_box(gemini_key, DFD_SYSTEM, f"PROCESSING ACTIVITIES:\n\n{json.dumps(enriched,indent=2)[:16000]}", 7000)
+        # Use blocking call for DFDs — streaming loses chunks on large JSON responses
+        with st.spinner("Gemini generating DFD JSON (this may take 30-60s)…"):
+            try:
+                raw_dfds = chat(gemini_key, DFD_SYSTEM,
+                                f"PROCESSING ACTIVITIES:\n\n{json.dumps(enriched,indent=2)[:16000]}",
+                                8000, model)
+            except Exception as e:
+                st.error(f"DFD generation error: {e}")
+                raw_dfds = ""
         try:
             dfd_list = parse_json_from_response(raw_dfds)
         except Exception as parse_err:
