@@ -151,6 +151,9 @@ def _get_positions(dot, img_w, img_h):
 
 
 def _overlay_controls(img, positions, privacy_controls, nodes):
+    """Overlay green privacy control boxes directly on diagram.
+    Uses fuzzy key matching so AI-generated keys always find their node."""
+    import re as _re
     img  = img.copy()
     draw = ImageDraw.Draw(img)
     W, H = img.size
@@ -166,10 +169,40 @@ def _overlay_controls(img, positions, privacy_controls, nodes):
     LW  = max(1,   int(2*scale))
     COLS= 2
 
+    # Build fuzzy lookup: normalised → position_key
+    def _norm(s):
+        return _re.sub(r"[^a-z0-9]", "_", str(s).lower().strip())
+
+    norm_to_poskey = {}
+    for pk in positions:
+        norm_to_poskey[_norm(pk)] = pk
+        # also map partial: "bgv_check" matches "bgv"
+        parts = [p for p in _norm(pk).split("_") if len(p)>2]
+        if parts:
+            norm_to_poskey[parts[0]] = pk
+
+    # Build node label lookup
+    node_lbl = {n["id"]: n.get("label","") for n in nodes}
+
     for raw_nid, controls in privacy_controls.items():
-        sid = _sid(raw_nid)
-        if sid not in positions or not controls: continue
-        p     = positions[sid]
+        if not controls: continue
+
+        # Try direct sid match first
+        sid = _re.sub(r"[^a-zA-Z0-9_]","_",str(raw_nid).strip())[:35]
+        if sid in positions:
+            pos_key = sid
+        else:
+            # Fuzzy: normalise the key and look up
+            nk = _norm(raw_nid)
+            pos_key = norm_to_poskey.get(nk)
+            if not pos_key:
+                # Try first word
+                first = nk.split("_")[0]
+                pos_key = norm_to_poskey.get(first)
+            if not pos_key:
+                continue   # can't find node, skip
+
+        p     = positions[pos_key]
         pills = controls[:6]
         nr    = math.ceil(len(pills)/COLS)
         nc    = min(COLS, len(pills))
@@ -207,6 +240,7 @@ def _overlay_controls(img, positions, privacy_controls, nodes):
             draw.text((int(px+(BW-tw)/2),int(py+(BH-th)/2)),
                       text,font=f,fill="#145A32")
     return img
+
 
 
 HEADER_H=88; BANNER_H=52; LEG_H=52; PAD=44
