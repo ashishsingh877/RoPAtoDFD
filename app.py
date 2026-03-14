@@ -184,8 +184,15 @@ if uploaded and gemini_key:
         st.markdown("#### ② Generating Data Flow Diagrams…")
 
         raw_dfds = stream_box(gemini_key, DFD_SYSTEM, f"PROCESSING ACTIVITIES:\n\n{json.dumps(enriched,indent=2)[:16000]}", 7000)
-        try:    dfd_list = parse_json_from_response(raw_dfds)
-        except: dfd_list = []; st.session_state["dfds_raw"] = raw_dfds; st.warning("DFD JSON parse failed.")
+        try:
+            dfd_list = parse_json_from_response(raw_dfds)
+        except Exception as parse_err:
+            dfd_list = []
+            st.session_state["dfds_raw"] = raw_dfds
+            st.error(f"DFD JSON parse failed: {parse_err}")
+            st.markdown("**Raw Gemini response (first 1000 chars):**")
+            st.code(raw_dfds[:1000] if raw_dfds else "(empty)")
+            st.warning("Tip: If response starts with text before JSON, the parser should handle it. Share this error above for a fix.")
 
         prog = st.progress(0, text="Rendering diagrams…")
         rendered = []
