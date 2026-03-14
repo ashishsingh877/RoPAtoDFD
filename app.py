@@ -9,6 +9,7 @@ from ropa_parser  import parse_ropa_excel, processes_to_text
 from ai_client    import chat, stream_chat, parse_json_from_response
 from prompts      import EXTRACT_SYSTEM, DFD_SYSTEM, RISK_SYSTEM
 from dfd_renderer import render_dfd
+from drawio_export  import generate_drawio_xml
 
 st.set_page_config(page_title="ROPA — DFD Analyzer", page_icon="🔐",
                    layout="wide", initial_sidebar_state="expanded")
@@ -322,4 +323,33 @@ if "dfds" in st.session_state or "risk_md" in st.session_state:
             if risk_md: zf.writestr(f"risk_analysis_{ts}.md", risk_md)
             zf.writestr(f"ropa_processes_{ts}.json", json.dumps(enriched,indent=2,ensure_ascii=False))
         zio.seek(0)
+        # ── Draw.io XML export ─────────────────────────────────────────────────
+        st.markdown("---")
+        st.markdown("### 🔧 Editable Draw.io Files")
+        st.markdown('<div class="info-box">Download as draw.io XML → open at <b>app.diagrams.net</b> → fully editable, resize, restyle, add annotations. Free tool.</div>', unsafe_allow_html=True)
+        drawio_cols = st.columns(min(len(dfds)*2, 6))
+        dci = 0
+        for i, dfd in enumerate(dfds):
+            pname = dfd.get("process_name", f"P{i+1:03d}")
+            safe  = pname.replace(" ","_").replace("/","-")[:30]
+            pid   = dfd.get("id", f"P{i+1:03d}")
+            try:
+                xml_a = generate_drawio_xml(dfd, "asis")
+                xml_f = generate_drawio_xml(dfd, "future")
+                with drawio_cols[dci % 6]:
+                    st.download_button(f"📐 {pid} As-Is (XML)",
+                        data=xml_a, file_name=f"DFD_{pid}_{safe}_AsIs.drawio",
+                        mime="application/xml", use_container_width=True,
+                        key=f"dio_a_{i}")
+                dci+=1
+                with drawio_cols[dci % 6]:
+                    st.download_button(f"📐 {pid} Post-Compliance (XML)",
+                        data=xml_f, file_name=f"DFD_{pid}_{safe}_PostCompliance.drawio",
+                        mime="application/xml", use_container_width=True,
+                        key=f"dio_f_{i}")
+                dci+=1
+            except Exception as ex:
+                st.warning(f"draw.io export failed for {pid}: {ex}")
+
+        st.markdown("---")
         st.download_button("📦 Full Bundle (ZIP)", data=zio.getvalue(), file_name=f"ropa_analysis_{ts}.zip", mime="application/zip")
