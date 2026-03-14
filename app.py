@@ -52,8 +52,8 @@ hr { border-color:#21262d; }
 with st.sidebar:
     st.markdown('<p style="font-family:JetBrains Mono,monospace;color:#58a6ff;font-size:1rem;">🔐 ROPA Analyzer</p>', unsafe_allow_html=True)
     st.markdown("---")
-    gemini_key = st.text_input("Gemini API Key", type="password", placeholder="AIza…")
-    model    = st.selectbox("Model", ["gemini-2.5-flash","gemini-2.5-pro"])
+    groq_key = st.text_input("Groq API Key", type="password", placeholder="gsk_…")
+    model    = st.selectbox("Model", ["llama-3.3-70b-versatile","llama3-70b-8192","mixtral-8x7b-32768"])
     st.markdown("---")
     st.markdown("""
 **Output per process**
@@ -62,7 +62,7 @@ with st.sidebar:
 - ⚠️ Risk & Gap Analysis
 """)
     st.markdown("---")
-    st.markdown('<span class="badge b-green">Gemini AI</span> <span class="badge b-blue">DPDPA 2023</span>', unsafe_allow_html=True)
+    st.markdown('<span class="badge b-green">Groq Free</span> <span class="badge b-blue">DPDPA 2023</span>', unsafe_allow_html=True)
 
 # ── Hero ───────────────────────────────────────────────────────────────────────
 st.markdown("""
@@ -142,7 +142,7 @@ def set_stages(s1, s2, s3):
         f'<div class="stage {s3}">③ Risk Report</div>'
         f'</div>', unsafe_allow_html=True)
 
-if uploaded and gemini_key:
+if uploaded and groq_key:
     c_run, c_info = st.columns([1,3])
     with c_run:
         run = st.button("🚀  Analyse ROPA", use_container_width=True)
@@ -161,7 +161,7 @@ if uploaded and gemini_key:
         set_stages("active","","")
         st.markdown("#### ① Extracting processing activities…")
 
-        raw_ext = stream_box(gemini_key, EXTRACT_SYSTEM, f"ROPA DATA:\n\n{processes_to_text(raw_procs)[:18000]}", 4096)
+        raw_ext = stream_box(groq_key, EXTRACT_SYSTEM, f"ROPA DATA:\n\n{processes_to_text(raw_procs)[:18000]}", 4096)
         try:    enriched = parse_json_from_response(raw_ext)
         except: enriched = raw_procs
 
@@ -192,11 +192,11 @@ if uploaded and gemini_key:
                               text=f"DFD {pi+1}/{len(enriched)}: {pname[:45]}…")
             try:
                 raw_dfd = chat(
-                    gemini_key, DFD_SYSTEM,
+                    groq_key, DFD_SYSTEM,
                     (f"Generate a DFD for this ONE processing activity only.\n"
                      f"Return a JSON ARRAY with EXACTLY ONE element.\n\n"
                      f"{json.dumps(proc, indent=2)[:8000]}"),
-                    6000, model
+                    16000, model
                 )
                 result = parse_json_from_response(raw_dfd)
                 if isinstance(result, list) and result:
@@ -233,7 +233,7 @@ if uploaded and gemini_key:
 
         set_stages("done","done","active")
         st.markdown("#### ③ Running Risk & Gap Analysis…")
-        risk_md = stream_box(gemini_key, RISK_SYSTEM, f"PROCESSING ACTIVITIES:\n\n{json.dumps(enriched,indent=2)[:16000]}", 5000)
+        risk_md = stream_box(groq_key, RISK_SYSTEM, f"PROCESSING ACTIVITIES:\n\n{json.dumps(enriched,indent=2)[:16000]}", 5000)
         st.session_state["risk_md"] = risk_md
         set_stages("done","done","done")
         st.success("✓ Complete")
@@ -241,8 +241,8 @@ if uploaded and gemini_key:
 
 elif not uploaded:
     st.markdown('<div style="background:#161b22;border:1px solid #21262d;border-radius:10px;text-align:center;color:#21262d;padding:3rem;">⬆️  Upload a ROPA Excel file above to begin</div>', unsafe_allow_html=True)
-elif not gemini_key:
-    st.markdown('<div style="background:#161b22;border:1px solid #21262d;border-radius:10px;text-align:center;color:#21262d;padding:2rem;">🔑  Enter your Gemini API key in the sidebar</div>', unsafe_allow_html=True)
+elif not groq_key:
+    st.markdown('<div style="background:#161b22;border:1px solid #21262d;border-radius:10px;text-align:center;color:#21262d;padding:2rem;">🔑  Enter your Groq API key in the sidebar</div>', unsafe_allow_html=True)
 
 # ── Results ────────────────────────────────────────────────────────────────────
 if "dfds" in st.session_state or "risk_md" in st.session_state:
