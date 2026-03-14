@@ -1,110 +1,141 @@
 """
-ai_client.py
-============
-Thin wrapper around the Groq REST API.
-Uses llama-3.3-70b-versatile (free tier) by default.
-Falls back to llama3-70b-8192 if the primary model is unavailable.
+ai_client.py  —  Google Gemini API wrapper
+Uses: gemini-1.5-pro (best quality) with fallback to gemini-1.5-flash
 """
 
 import json
 import re
 import requests
-from typing import Generator
 
+GEMINI_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
 
-GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
+def _model_url(model: str, api_key: str, stream: bool = False) -> str:
+    action = "streamGenerateContent" if stream else "generateContent"
+    return f"{GEMINI_BASE}/{model}:{action}?key={api_key}"
 
-PRIMARY_MODEL  = "llama-3.3-70b-versatile"
-FALLBACK_MODEL = "llama3-70b-8192"
-
-
-def _headers(api_key: str) -> dict:
+def _build_body(system: str, user: str, max_tokens: int) -> dict:
     return {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type":  "application/json",
+        "system_instruction": {"parts": [{"text": system}]},
+        "contents": [{"role": "user", "parts": [{"text": user}]}],
+        "generationConfig": {
+            "maxOutputTokens": max_tokens,
+            "temperature": 0.2,
+        }
     }
 
-
-def chat(
-    api_key:    str,
-    system:     str,
-    user:       str,
-    max_tokens: int = 4096,
-    model:      str = PRIMARY_MODEL,
-) -> str:
-    """Blocking single-shot call. Returns full response text."""
-    payload = {
-        "model":      model,
-        "max_tokens": max_tokens,
-        "messages": [
-            {"role": "system",  "content": system},
-            {"role": "user",    "content": user},
-        ],
-    }
-    resp = requests.post(GROQ_API_URL, headers=_headers(api_key), json=payload, timeout=120)
-
-    if resp.status_code == 404 and model == PRIMARY_MODEL:
-        # Retry with fallback model
-        payload["model"] = FALLBACK_MODEL
-        resp = requests.post(GROQ_API_URL, headers=_headers(api_key), json=payload, timeout=120)
-
-    if resp.status_code != 200:
-        raise RuntimeError(f"Groq API error {resp.status_code}: {resp.text[:400]}")
-
-    data = resp.json()
-    return data["choices"][0]["message"]["content"]
+def chat(api_key: str, system: str, user: str,
+         max_tokens: int = 6000, model: str = "gemini-1.5-pro") -> str:
+    """Blocking Gemini call. Returns full response text."""
+    body = _build_body(system, user, max_tokens)
+    for try_model in [model, "gemini-1.5-flash", "gemini-1.5-pro"]:
+        try:
+            r = requests.post(_model_url(try_model, api_key, stream=False),
+                              json=body, timeout=120)
+            if r.status_code == 200:
+                data = r.json()
+                return data["candidates"][0]["content"]["parts"][0]["text"]
+            elif r.status_code == 429:
+                continue   # quota hit, try next model
+            else:
+                raise ValueError(f"Gemini error {r.status_code}: {r.text[:300]}")
+        except (ValueError, KeyError):
+            raise
+        except Exception as e:
+            raise ValueError(f"Gemini request failed: {e}")
+    raise ValueError("All Gemini models failed (quota exceeded?)")
 
 
-def stream_chat(
-    api_key:    str,
-    system:     str,
-    user:       str,
-    max_tokens: int = 4096,
-    model:      str = PRIMARY_MODEL,
-) -> Generator[str, None, None]:
-    """Server-sent-events streaming. Yields text chunks."""
-    payload = {
-        "model":      model,
-        "max_tokens": max_tokens,
-        "stream":     True,
-        "messages": [
-            {"role": "system",  "content": system},
-            {"role": "user",    "content": user},
-        ],
-    }
-    with requests.post(
-        GROQ_API_URL,
-        headers=_headers(api_key),
-        json=payload,
-        stream=True,
-        timeout=120,
-    ) as resp:
-        if resp.status_code != 200:
-            raise RuntimeError(f"Groq API error {resp.status_code}: {resp.text[:400]}")
-        for line in resp.iter_lines():
-            if not line:
+def stream_chat(api_key: str, system: str, user: str,
+                max_tokens: int = 6000, model: str = "gemini-1.5-pro"):
+    """
+    Streaming Gemini call. Yields text chunks.
+    Falls back to blocking call if streaming fails.
+    """
+    body = _build_body(system, user, max_tokens)
+    try:
+        r = requests.post(_model_url(model, api_key, stream=True),
+                          json=body, stream=True, timeout=180)
+        if r.status_code != 200:
+            # fall back to blocking
+            yield chat(api_key, system, user, max_tokens, model)
+            return
+
+        buffer = ""
+        for raw_line in r.iter_lines(decode_unicode=True):
+            if not raw_line:
                 continue
-            text = line.decode("utf-8")
-            if text.startswith("data: "):
-                text = text[6:]
-            if text == "[DONE]":
-                break
+            line = raw_line.strip()
+            if line.startswith("data:"):
+                line = line[5:].strip()
+            if not line or line == "[DONE]":
+                continue
+            buffer += line
+            # Try to extract text chunks from accumulated JSON fragments
             try:
-                chunk = json.loads(text)
-                delta = chunk["choices"][0]["delta"].get("content", "")
-                if delta:
-                    yield delta
+                obj = json.loads(buffer)
+                buffer = ""
+                for cand in obj.get("candidates", []):
+                    for part in cand.get("content", {}).get("parts", []):
+                        txt = part.get("text", "")
+                        if txt:
+                            yield txt
+            except json.JSONDecodeError:
+                # Incomplete JSON — keep buffering
+                pass
+
+        # Flush any remaining buffer
+        if buffer:
+            try:
+                obj = json.loads(buffer)
+                for cand in obj.get("candidates", []):
+                    for part in cand.get("content", {}).get("parts", []):
+                        txt = part.get("text", "")
+                        if txt:
+                            yield txt
             except Exception:
-                continue
+                pass
+
+    except Exception:
+        # Full fallback to blocking
+        yield chat(api_key, system, user, max_tokens, model)
 
 
-def parse_json_from_response(text: str):
-    """Extract JSON array or object from a model response."""
-    # Try to find ```json ... ``` block
-    match = re.search(r"```(?:json)?\s*([\s\S]+?)```", text)
-    raw = match.group(1).strip() if match else text.strip()
-    # Strip any trailing commentary after the last ] or }
-    last_bracket = max(raw.rfind("]"), raw.rfind("}"))
-    if last_bracket != -1:
-        raw = raw[: last_bracket + 1]
-    return json.loads(raw)
+def parse_json_from_response(text: str) -> list:
+    """
+    Extract a JSON array from Gemini response.
+    Handles markdown fences and leading/trailing text.
+    """
+    if not text:
+        raise ValueError("Empty response")
+
+    # Strip markdown fences
+    cleaned = re.sub(r"```(?:json)?", "", text).strip().rstrip("`").strip()
+
+    # Try direct parse
+    try:
+        result = json.loads(cleaned)
+        return result if isinstance(result, list) else [result]
+    except json.JSONDecodeError:
+        pass
+
+    # Find first [ ... ] block
+    start = cleaned.find("[")
+    end   = cleaned.rfind("]")
+    if start != -1 and end > start:
+        try:
+            result = json.loads(cleaned[start:end+1])
+            return result if isinstance(result, list) else [result]
+        except json.JSONDecodeError:
+            pass
+
+    # Find first { ... } block (single object)
+    start = cleaned.find("{")
+    end   = cleaned.rfind("}")
+    if start != -1 and end > start:
+        try:
+            result = json.loads(cleaned[start:end+1])
+            return [result]
+        except json.JSONDecodeError:
+            pass
+
+    raise ValueError(f"Could not parse JSON from response. First 200 chars: {text[:200]}")
