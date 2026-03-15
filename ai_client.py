@@ -1,8 +1,9 @@
 import json
+import streamlit as st
 import google.generativeai as genai
 
 
-genai.configure(api_key="YOUR_GEMINI_API_KEY")
+genai.configure(api_key=st.secrets["AIzaSyClulfLQjWuzdVWWMM3kdJOGhX_0zlb-8s"])
 
 
 def generate_dfd(ropa):
@@ -12,12 +13,12 @@ def generate_dfd(ropa):
     prompt = f"""
 Convert the following RoPA data into DFD JSON structure.
 
-Structure format:
+Format:
 
 {{
  "phases":[
    {{
-    "name":"Recruitment",
+    "name":"Process",
     "steps":[
       {{"id":"1","label":"Applicant","type":"external"}},
       {{"id":"2","label":"HR Team","type":"process"}}
