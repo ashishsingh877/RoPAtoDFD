@@ -25,7 +25,41 @@ def _clean_label(v):
     s = s.replace("\n", " ").strip()
     # escape for Graphviz safety if needed
     return html.escape(s)
+    def node_style(node_type):
 
+    node_type = (node_type or "process").lower()
+
+    if node_type == "external":
+        return {
+            "shape": "box",
+            "style": "rounded,filled",
+            "fillcolor": "#FFF2CC",
+            "color": "#B7950B"
+        }
+
+    if node_type == "datastore":
+        return {
+            "shape": "cylinder",
+            "style": "filled",
+            "fillcolor": "#D6EAF8",
+            "color": "#1F618D"
+        }
+
+    if node_type == "decision":
+        return {
+            "shape": "diamond",
+            "style": "filled",
+            "fillcolor": "#F5B7B1",
+            "color": "#922B21"
+        }
+
+    return {
+        "shape": "box",
+        "style": "rounded,filled",
+        "fillcolor": "#FDEDEC",
+        "color": "#7B241C"
+    }
+    
 def _ensure_nodes_edges(dfd_section):
     """
     Accepts a dfd section (maybe missing) and returns (nodes, edges)
