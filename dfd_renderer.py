@@ -94,22 +94,41 @@ def render_graph(dot):
 
 def render_dfd(dfd):
 
-    asis = dfd.get("asis",{})
-    future = dfd.get("future",{})
+    # try structured format first
+    asis = dfd.get("asis")
+    future = dfd.get("future")
 
-    pname = dfd.get("process_name","Process")
+    # fallback if AI returned flat nodes/edges
+    if not asis:
+        asis = {
+            "nodes": dfd.get("nodes", []),
+            "edges": dfd.get("edges", [])
+        }
+
+    if not future:
+        future = {
+            "nodes": dfd.get("nodes", []),
+            "edges": dfd.get("edges", [])
+        }
+
+    pname = dfd.get("process_name", "Process")
 
     g1 = build_graph(
-        asis.get("nodes",[]),
-        asis.get("edges",[]),
+        asis.get("nodes", []),
+        asis.get("edges", []),
         f"{pname} — Current State"
     )
 
     g2 = build_graph(
-        future.get("nodes",[]),
-        future.get("edges",[]),
+        future.get("nodes", []),
+        future.get("edges", []),
         f"{pname} — Post Compliance"
     )
+
+    a_png, a_pdf = render_graph(g1)
+    f_png, f_pdf = render_graph(g2)
+
+    return a_png, a_pdf, f_png, f_pdf
 
     a_png,a_pdf = render_graph(g1)
     f_png,f_pdf = render_graph(g2)
