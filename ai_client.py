@@ -9,58 +9,54 @@ genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
 
 def generate_dfd(ropa):
 
-    model = genai.GenerativeModel("gemini-1.5-flash")
+    try:
 
-    prompt = f"""
-You are a system architect.
+        model = genai.GenerativeModel("gemini-pro")
 
-Convert the following RoPA information into a structured DFD JSON.
+        prompt = f"""
+Return ONLY valid JSON.
 
-STRICT RULES:
-- Only return JSON
-- No explanations
-- Valid JSON only
+Convert this RoPA data into DFD JSON.
 
 Format:
 
 {{
  "phases":[
    {{
-    "name":"Recruitment",
-    "steps":[
-      {{"id":"1","label":"Job Applicant","type":"external"}},
-      {{"id":"2","label":"HR Team","type":"process"}}
-    ],
-    "flows":[
-      {{"from":"1","to":"2"}}
-    ]
+     "name":"Process",
+     "steps":[
+       {{"id":"1","label":"User","type":"external"}},
+       {{"id":"2","label":"System","type":"process"}}
+     ],
+     "flows":[
+       {{"from":"1","to":"2"}}
+     ]
    }}
  ]
 }}
 
-RoPA Data:
+RoPA:
 {ropa}
 """
 
-    response = model.generate_content(prompt)
+        response = model.generate_content(prompt)
 
-    text = response.text.strip()
+        text = response.text.strip()
 
-    # remove markdown if Gemini adds it
-    text = text.replace("```json", "").replace("```", "")
+        text = text.replace("```json", "").replace("```", "")
 
-    try:
         return json.loads(text)
 
     except Exception:
-        # fallback if AI response breaks
+
+        # fallback if Gemini fails
         return {
             "phases":[
                 {
-                    "name":"RoPA Process",
+                    "name":"RoPA Flow",
                     "steps":[
                         {"id":"1","label":"Data Subject","type":"external"},
-                        {"id":"2","label":"Processing System","type":"process"}
+                        {"id":"2","label":"Organization System","type":"process"}
                     ],
                     "flows":[
                         {"from":"1","to":"2"}
