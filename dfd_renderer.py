@@ -1,135 +1,117 @@
 import graphviz
-import io
 
 
-DFD_JSON_SCHEMA = {
-    "id": "string",
-    "process_name": "string",
-    "asis": {
-        "nodes": [],
-        "edges": []
-    },
-    "future": {
-        "nodes": [],
-        "edges": []
-    }
-}
+DFD_JSON_SCHEMA = {}
 
 
-# --------------------------------------------------
-# node styling
-# --------------------------------------------------
+def node_style(t):
 
-def node_style(node_type):
+    if t == "external":
+        return {"shape":"box","style":"rounded,filled","fillcolor":"#FFF2CC","color":"#B7950B"}
 
-    if node_type == "external":
-        return dict(shape="box", style="rounded,filled",
-                    fillcolor="#FFF2CC", color="#B7950B")
+    if t == "datastore":
+        return {"shape":"cylinder","style":"filled","fillcolor":"#D6EAF8","color":"#1F618D"}
 
-    if node_type == "datastore":
-        return dict(shape="cylinder", style="filled",
-                    fillcolor="#D6EAF8", color="#1F618D")
+    if t == "decision":
+        return {"shape":"diamond","style":"filled","fillcolor":"#F5B7B1","color":"#922B21"}
 
-    if node_type == "decision":
-        return dict(shape="diamond", style="filled",
-                    fillcolor="#F5B7B1", color="#922B21")
+    return {"shape":"box","style":"rounded,filled","fillcolor":"#FDEDEC","color":"#7B241C"}
 
-    return dict(shape="box", style="rounded,filled",
-                fillcolor="#FDEDEC", color="#7B241C")
-
-
-# --------------------------------------------------
-# graph builder
-# --------------------------------------------------
 
 def build_graph(nodes, edges, title):
 
     dot = graphviz.Digraph(
         format="png",
         graph_attr={
-            "rankdir": "LR",
-            "splines": "ortho",
-            "nodesep": "0.9",
-            "ranksep": "1.2",
-            "fontname": "Segoe UI"
-        },
-        node_attr={
-            "fontname": "Segoe UI",
-            "fontsize": "11"
-        },
-        edge_attr={
-            "color": "#555555",
-            "penwidth": "1.6"
+            "rankdir":"LR",
+            "splines":"ortho",
+            "nodesep":"1.0",
+            "ranksep":"1.5",
+            "fontname":"Segoe UI"
         }
     )
 
     dot.attr(label=title, labelloc="t", fontsize="20")
 
+    phases = {
+        "collection":[],
+        "processing":[],
+        "storage":[],
+        "sharing":[],
+        "outcome":[]
+    }
+
     for n in nodes:
 
-        style = node_style(n.get("type", "process"))
+        phase = n.get("phase","processing").lower()
 
-        dot.node(
-            n["id"],
-            n["label"],
-            **style
-        )
+        if phase not in phases:
+            phase="processing"
+
+        phases[phase].append(n)
+
+    def lane(name, nodeset):
+
+        with dot.subgraph(name=f"cluster_{name}") as c:
+
+            c.attr(
+                label=name.capitalize(),
+                style="rounded",
+                color="#DDDDDD",
+                fontname="Segoe UI"
+            )
+
+            for n in nodeset:
+
+                s = node_style(n.get("type","process"))
+
+                c.node(n["id"], n["label"], **s)
+
+    lane("collection",phases["collection"])
+    lane("processing",phases["processing"])
+    lane("storage",phases["storage"])
+    lane("sharing",phases["sharing"])
+    lane("outcome",phases["outcome"])
 
     for e in edges:
 
         dot.edge(
             e["from"],
             e["to"],
-            label=e.get("label", "")
+            label=e.get("label","")
         )
 
     return dot
 
-
-# --------------------------------------------------
-# render helper
-# --------------------------------------------------
 
 def render_graph(dot):
 
     png = dot.pipe(format="png")
     pdf = dot.pipe(format="pdf")
 
-    return png, pdf
+    return png,pdf
 
-
-# --------------------------------------------------
-# main renderer used by app.py
-# --------------------------------------------------
 
 def render_dfd(dfd):
 
-    # fallback if AI returns flat structure
-    asis = dfd.get("asis") or {
-        "nodes": dfd.get("nodes", []),
-        "edges": dfd.get("edges", [])
-    }
+    asis = dfd.get("asis",{})
+    future = dfd.get("future",{})
 
-    future = dfd.get("future") or {
-        "nodes": dfd.get("nodes", []),
-        "edges": dfd.get("edges", [])
-    }
-
-    pname = dfd.get("process_name", "Process")
+    pname = dfd.get("process_name","Process")
 
     g1 = build_graph(
-        asis.get("nodes", []),
-        asis.get("edges", []),
+        asis.get("nodes",[]),
+        asis.get("edges",[]),
         f"{pname} — Current State"
     )
 
     g2 = build_graph(
-        future.get("nodes", []),
-        future.get("edges", []),
+        future.get("nodes",[]),
+        future.get("edges",[]),
         f"{pname} — Post Compliance"
     )
 
-    a_png, a_pdf = render_graph(g1)
-    f_png, f_pdf = render_graph(g2)
+    a_png,a_pdf = render_graph(g1)
+    f_png,f_pdf = render_graph(g2)
 
-    return a_png, a_pdf, f_png, f_pdf
+    return a_png,a_pdf,f_png,f_pdf
