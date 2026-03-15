@@ -146,27 +146,85 @@ def _node_style(node_type):
     return {"shape":"box","style":"rounded,filled","fillcolor":"#FDEDEC","color":"#7B241C"}
 
 def _build_graph(nodes, edges, title):
-    # Graphviz attributes tuned for cleaner consulting-style DFDs
+
     dot = graphviz.Digraph(
         format="png",
         graph_attr={
-            "rankdir":"LR",
-            "splines":"ortho",
-            "nodesep":"0.9",
-            "ranksep":"1.25",
-            "fontname":"Segoe UI"
+            "rankdir": "LR",
+            "splines": "ortho",
+            "nodesep": "1.1",
+            "ranksep": "1.3",
+            "fontname": "Segoe UI"
         },
         node_attr={
-            "fontname":"Segoe UI",
-            "fontsize":"11"
+            "fontname": "Segoe UI",
+            "fontsize": "11",
+            "shape": "box",
+            "style": "rounded,filled"
         },
         edge_attr={
-            "color":"#555555",
-            "penwidth":"1.6",
-            "arrowsize":"0.8"
+            "color": "#555",
+            "penwidth": "1.6"
         }
     )
 
+    dot.attr(label=title, labelloc="t", fontsize="18")
+
+    # ---- group nodes by phase ----
+    phases = ["collection", "processing", "storage", "sharing", "outcome"]
+    buckets = {p: [] for p in phases}
+
+    for n in nodes:
+        p = n.get("phase", "processing").lower()
+        if p not in buckets:
+            p = "processing"
+        buckets[p].append(n)
+
+    previous = None
+
+    # ---- create horizontal lanes ----
+    for p in phases:
+
+        with dot.subgraph(name=f"cluster_{p}") as c:
+
+            c.attr(
+                label=p.capitalize(),
+                style="rounded",
+                color="#DDDDDD",
+                fontsize="12"
+            )
+
+            # keep nodes aligned horizontally
+            with c.subgraph() as rank:
+                rank.attr(rank="same")
+
+                for n in buckets[p]:
+
+                    style = node_style(n.get("type", "process"))
+
+                    rank.node(
+                        n["id"],
+                        n["label"],
+                        **style
+                    )
+
+        # connect lanes invisibly to enforce order
+        if previous and buckets[p]:
+            dot.edge(previous, buckets[p][0]["id"], style="invis")
+
+        if buckets[p]:
+            previous = buckets[p][-1]["id"]
+
+    # ---- edges ----
+    for e in edges:
+
+        dot.edge(
+            e["from"],
+            e["to"],
+            label=e.get("label", "")
+        )
+
+    return dot
     dot.attr(label=title, labelloc="t", fontsize="18")
 
     # Create phase buckets
